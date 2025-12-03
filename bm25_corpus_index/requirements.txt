@@ -1,0 +1,6 @@
+google-cloud-storage
+markdownify
+pinecone-text
+kfp
+google-cloud-aiplatform
+docker

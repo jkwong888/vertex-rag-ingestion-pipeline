@@ -1,0 +1,5 @@
+google-cloud-aiplatform
+google-cloud-storage
+pinecone-text
+google-genai
+requests

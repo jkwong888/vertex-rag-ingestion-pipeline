@@ -1,0 +1,8 @@
+{
+ "deployedIndex": {
+   "id": "bulbapedia_index",
+   "index": "projects/jkwng-vertex-playground/locations/us-central1/indexes/4856369137049403392",
+   "displayName": "bulbapedia_index",
+   "deploymentTier": "STORAGE"
+ }
+}

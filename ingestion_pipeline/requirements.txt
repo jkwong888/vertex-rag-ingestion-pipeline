@@ -1,0 +1,9 @@
+google-cloud-storage
+markdownify
+langchain
+langchain-text-splitters
+pinecone-text
+google-genai
+google-cloud-aiplatform
+google-cloud-aiplatform
+docker
