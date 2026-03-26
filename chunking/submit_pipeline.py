@@ -2,38 +2,32 @@ import argparse
 import os
 from google.cloud import aiplatform
 from kfp.compiler import Compiler
-from pipeline import rag_ingestion_pipeline
+from pipeline import chunk_pipeline
 
-PIPELINE_FILE_NAME = "rag_ingestion_pipeline.yaml"
+PIPELINE_FILE_NAME = "chunk_pipeline.yaml"
 
 def submit_pipeline(
     project: str,
     location: str,
     pipeline_root: str,
+    gcs_html_uri: str,
     gcs_chunks_uri: str,
-    index_name: str,
-    bm25_artifact_name: str,
-    embedding_model: str,
     enable_caching: bool
 ):
     aiplatform.init(project=project, location=location)
 
     Compiler().compile(
-        pipeline_func=rag_ingestion_pipeline,
+        pipeline_func=chunk_pipeline,
         package_path=PIPELINE_FILE_NAME
     )
 
     parameter_values = {
+        "gcs_html_uri": gcs_html_uri,
         "gcs_chunks_uri": gcs_chunks_uri,
-        "index_name": index_name,
-        "bm25_artifact_name": bm25_artifact_name,
-        "embedding_model": embedding_model,
-        "project": project,
-        "location": location
     }
 
     job = aiplatform.PipelineJob(
-        display_name=f"rag-ingestion-pipeline-{index_name}",
+        display_name="unified-chunking-pipeline",
         template_path=PIPELINE_FILE_NAME,
         pipeline_root=pipeline_root,
         parameter_values=parameter_values,
@@ -43,13 +37,12 @@ def submit_pipeline(
     job.submit()
     print(f"Pipeline job submitted. Resource name: {job.resource_name}")
 
-    # Clean up pipeline file
     if os.path.exists(PIPELINE_FILE_NAME):
         os.remove(PIPELINE_FILE_NAME)
         print(f"Deleted {PIPELINE_FILE_NAME}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Submit RAG Ingestion Pipeline to Vertex AI")
+    parser = argparse.ArgumentParser(description="Submit Unified Chunking Pipeline to Vertex AI")
 
     parser.add_argument(
         "--pipeline-root",
@@ -59,26 +52,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--project", required=True, help="Google Cloud Project ID")
     parser.add_argument("--region", default="us-central1", help="Google Cloud Region")
-    parser.add_argument("--gcs-chunks-root-uri", required=True, help="GCS URI for chunks root")
-    parser.add_argument("--chunk-version", required=True, help="Chunk version (e.g., v1)")
-    parser.add_argument("--embedding-model", default="gemini-embedding-001", help="Embedding model to use")
+    parser.add_argument("--gcs-html-uri", required=True, help="GCS URI for raw HTML files")
+    parser.add_argument("--version", required=True, help="Version (e.g., v1)")
+    parser.add_argument("--gcs-chunks-root-uri", required=True, help="GCS URI for chunks root (e.g., gs://bucket/pokemon/bulbapedia/chunks/)")
     parser.add_argument("--no-cache", action="store_true", help="Disable caching")
 
     args = parser.parse_args()
 
-    gcs_chunks_uri = os.path.join(args.gcs_chunks_root_uri, args.chunk_version)
-    bm25_artifact_name = f"bm25_index_{args.chunk_version}"
-    # Replace dots and special chars in embedding model name for index name if necessary
-    safe_model_name = args.embedding_model.replace(".", "-").replace("/", "-")
-    index_name = f"pokemon_index_{args.chunk_version}_{safe_model_name}"
+    gcs_chunks_uri = os.path.join(args.gcs_chunks_root_uri, args.version)
 
     submit_pipeline(
         project=args.project,
         location=args.region,
         pipeline_root=args.pipeline_root,
+        gcs_html_uri=args.gcs_html_uri,
         gcs_chunks_uri=gcs_chunks_uri,
-        index_name=index_name,
-        bm25_artifact_name=bm25_artifact_name,
-        embedding_model=args.embedding_model,
         enable_caching=not args.no_cache
     )

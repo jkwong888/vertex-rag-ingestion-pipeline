@@ -4,7 +4,7 @@ data "google_project" "project" {
 
 resource "google_vertex_ai_index" "vector_search_index" {
   project      = data.google_project.project.project_id
-  display_name = var.index_display_name
+  display_name = "${var.index_display_name}_${var.chunk_version}_${replace(replace(var.embedding_model, ".", "-"), "/", "-")}"
   description  = var.index_description
   region       = var.region
 

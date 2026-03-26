@@ -1,0 +1,7 @@
+google-cloud-storage
+markdownify
+langchain-text-splitters
+langchain
+beautifulsoup4
+kfp
+google-cloud-aiplatform

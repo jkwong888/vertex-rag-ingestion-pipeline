@@ -41,9 +41,14 @@ def parse_args() -> argparse.Namespace:
         "--region", default=os.getenv("REGION"), help="Vertex AI Pipelines region"
     )
     parser.add_argument(
-        "--gcs-uri",
-        default=os.getenv("GCS_URI"),
-        help="GCS URI with input files",
+        "--chunk-version",
+        required=True,
+        help="Chunk version (e.g., v1)",
+    )
+    parser.add_argument(
+        "--gcs-chunks-root-uri",
+        required=True,
+        help="GCS URI for chunks root (e.g., gs://bucket/pokemon/bulbapedia/chunks/)",
     )
     parser.add_argument(
         "--service-account",
@@ -84,7 +89,6 @@ def parse_args() -> argparse.Namespace:
         "region": parsed_args.region,
         "pipeline_root": parsed_args.pipeline_root,
     }
-    required_params["gcs_uri"] = parsed_args.gcs_uri
 
     for param_name, param_value in required_params.items():
         if param_value is None:
@@ -102,65 +106,62 @@ def parse_args() -> argparse.Namespace:
     return parsed_args
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point for pipeline submission."""
+
     args = parse_args()
 
-    if args.schedule_only and not args.cron_schedule:
-        logging.error("Missing --cron-schedule argument for scheduling")
-        sys.exit(1)
+    # Initialize AI Platform
+    aiplatform.init(project=args.project_id, location=args.region)
 
-    # Print configuration
-    logging.info("\nConfiguration:")
-    logging.info("--------------")
-    # Print all arguments dynamically
-    for arg_name, arg_value in vars(args).items():
-        logging.info(f"{arg_name}: {arg_value}")
-    logging.info("--------------\n")
+    # Compile the pipeline
+    compiler.Compiler().compile(
+        pipeline_func=pipeline,
+        package_path=PIPELINE_FILE_NAME,
+    )
 
-    compiler.Compiler().compile(pipeline_func=pipeline, package_path=PIPELINE_FILE_NAME)
-    # Create common pipeline job parameters
-    pipeline_job_params = {
-        "display_name": "bm25-index-pipeline",
-        "template_path": PIPELINE_FILE_NAME,
-        "pipeline_root": args.pipeline_root,
-        "project": args.project_id,
-        "enable_caching": (not args.disable_caching),
-        "location": args.region,
-        "parameter_values": {
-            "gcs_uri": args.gcs_uri,
-        },
+    gcs_chunks_uri = os.path.join(args.gcs_chunks_root_uri, args.chunk_version)
+
+    # Set parameter values
+    parameter_values = {
+        "gcs_chunks_uri": gcs_chunks_uri,
     }
 
-    # Create pipeline job instance
-    job = aiplatform.PipelineJob(**pipeline_job_params)
+    # Pipeline Display Name
+    display_name = args.pipeline_name or f"bm25-index-generation-pipeline-{args.chunk_version}"
 
-    if not args.schedule_only:
-        logging.info("Running pipeline and waiting for completion...")
-        job.submit(service_account=args.service_account)
-
-    if args.cron_schedule and args.schedule_only:
-        # No need to create new job instance since we already have one with the same params
-        pipeline_job_schedule = aiplatform.PipelineJobSchedule(
-            pipeline_job=job,
-            display_name=f"{args.pipeline_name} Weekly Ingestion Job",
+    # If cron schedule is provided, create a scheduled job
+    if args.cron_schedule:
+        pipeline_job = aiplatform.PipelineJob(
+            display_name=display_name,
+            template_path=PIPELINE_FILE_NAME,
+            pipeline_root=args.pipeline_root,
+            parameter_values=parameter_values,
+            enable_caching=not args.disable_caching,
         )
 
-        schedule_list = pipeline_job_schedule.list(
-            filter=f'display_name="{args.pipeline_name} Weekly Ingestion Job"',
-            project=args.project_id,
-            location=args.region,
+        job = aiplatform.PipelineJob.create_schedule(
+            display_name=display_name,
+            pipeline_job=pipeline_job,
+            schedule=args.cron_schedule,
         )
-        logging.info("Schedule lists found: %s", schedule_list)
-        if not schedule_list:
-            pipeline_job_schedule.create(
-                cron=args.cron_schedule, service_account=args.service_account
-            )
-            logging.info("Schedule created")
-        else:
-            schedule_list[0].update(cron=args.cron_schedule)
-            logging.info("Schedule updated")
+        logging.info(f"Scheduled pipeline job created: {job.resource_name}")
 
-    # Clean up pipeline file
-    if os.path.exists(PIPELINE_FILE_NAME):
-        os.remove(PIPELINE_FILE_NAME)
-        logging.info(f"Deleted {PIPELINE_FILE_NAME}")
+        if args.schedule_only:
+            return
+
+    # Create and submit the PipelineJob
+    pipeline_job = aiplatform.PipelineJob(
+        display_name=display_name,
+        template_path=PIPELINE_FILE_NAME,
+        pipeline_root=args.pipeline_root,
+        parameter_values=parameter_values,
+        enable_caching=not args.disable_caching,
+    )
+
+    pipeline_job.submit(service_account=args.service_account)
+    logging.info(f"Pipeline job submitted: {pipeline_job.resource_name}")
+
+
+if __name__ == "__main__":
+    main()

@@ -262,11 +262,41 @@ def main():
     )
 
     context_chunks = []
+    blob_cache = {}
+    storage_client = storage.Client()
+    
     for neighbor in neighbors:
         datapoint = neighbor.get("datapoint", {})
-        chunk = datapoint.get("embeddingMetadata", {}).get("chunk")
-        if chunk:
-            context_chunks.append(chunk)
+        metadata = datapoint.get("embeddingMetadata", {})
+        
+        chunk_uri = metadata.get("chunk_gcs_uri")
+        chunk_line_offset = metadata.get("chunk_line_offset")
+        
+        if chunk_uri and chunk_line_offset is not None:
+            if chunk_uri not in blob_cache:
+                if chunk_uri.startswith("gs://"):
+                    parsed = urlparse(chunk_uri)
+                    bucket = storage_client.bucket(parsed.netloc)
+                    blob = bucket.blob(parsed.path.lstrip("/"))
+                    content = blob.download_as_text(encoding="utf-8")
+                    blob_cache[chunk_uri] = content.splitlines()
+                else:
+                    # Assume local path (for local test runner)
+                    if os.path.exists(chunk_uri):
+                        with open(chunk_uri, 'r', encoding='utf-8') as f:
+                            blob_cache[chunk_uri] = f.readlines()
+                    else:
+                        print(f"Warning: Chunk URI {chunk_uri} not found locally or via GCS.")
+                        continue
+                
+            lines = blob_cache[chunk_uri]
+            offset_idx = int(chunk_line_offset)
+            if offset_idx < len(lines):
+                line = lines[offset_idx]
+                chunk_data = json.loads(line)
+                chunk_text = chunk_data.get("chunk")
+                if chunk_text:
+                    context_chunks.append(chunk_text)
 
     if context_chunks:
         answer = generate_answer(query, context_chunks, client, model_name="gemini-2.5-flash")

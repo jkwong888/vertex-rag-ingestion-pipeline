@@ -2,12 +2,11 @@ import os
 import scrapy
 import base64
 import google_crc32c
+import datetime
 from google.cloud import storage
 from scrapy.spiders import CrawlSpider, Rule
 from scrapy.linkextractors import LinkExtractor
 from scrapy.crawler import CrawlerProcess
-
-from markdownify import markdownify
 
 START_URL = "https://bulbapedia.bulbagarden.net/wiki/List_of_Pok%C3%A9mon_by_National_Pok%C3%A9dex_number"
 DOWNLOAD_REGEX = r'wiki/.*_\(Pok%C3%A9mon\)'
@@ -46,6 +45,7 @@ class WebSpider(CrawlSpider):
         # drop the first part of the path (e.g. /wiki)
         page = response.url.split("/")[-1].split("?")[0]
         response_bytes = response.body
+        scrape_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S%Z")
 
         try:
             blob_name = f"{GCS_BUCKET_PATH}/{page}.html"
@@ -61,6 +61,8 @@ class WebSpider(CrawlSpider):
             else:
                 blob = bucket.blob(blob_name)
                 blob.metadata = {'original_url': response.url}
+                blob.metadata['scrape_time'] = scrape_time
+
                 blob.upload_from_string(response_bytes, content_type='text/html')
                 self.log(f"Uploaded raw HTML {blob_name} to GCS path gs://{GCS_BUCKET_NAME}/{blob_name}")
         except Exception as e:

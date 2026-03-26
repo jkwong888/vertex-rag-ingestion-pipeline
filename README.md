@@ -5,50 +5,82 @@ This repository contains an implementation for building a Retrieval-Augmented Ge
 ## Architecture
 The system implements a complex ingestion and retrieval architecture designed to handle hybrid search.
 
+```mermaid
+graph TD
+    subgraph "Ingestion Pipeline (KFP)"
+        HTML[GCS HTML Documents] --> CHUNK[Chunking Component]
+        PREV[Previous Chunks GCS] -.-> |Skip Chunking| CHUNK
+        
+        CHUNK --> |dsl.Dataset| BM25[BM25 Index Build]
+        BM25 --> |dsl.Model| SPARSE[Sparse Embedding Gen]
+        CHUNK --> |dsl.Dataset| SPARSE
+        
+        CHUNK --> |dsl.Dataset| DENSE[Dense Embedding Gen]
+        
+        CHUNK --> |dsl.Dataset| MERGE[Merge Embeddings]
+        SPARSE --> |dsl.Artifact| MERGE
+        DENSE --> |dsl.Artifact| MERGE
+        
+        MERGE --> |dsl.Artifact| INDEX[Vertex AI Vector Search]
+    end
+
+    subgraph "Query Stage"
+        QUERY[User Query] --> EMBED[Gemini & BM25 Encoding]
+        EMBED --> SEARCH[Hybrid Search Request]
+        INDEX --> SEARCH
+        SEARCH --> RERANK[Re-ranking & Context Extraction]
+        RERANK --> GEMINI[Gemini Flash Generation]
+        GEMINI --> ANSWER[Final Answer]
+    end
+```
+
 The workflow consists of four main logical stages:
 
-1. **Data Collection** ([scrape/](scrape/)): Crawls a website (Bulbapedia) to gather raw HTML documents and stores them in Google Cloud Storage (GCS).
+1. **Data Collection** ([scrape/](scrape/)): Crawls a website (Bulbapedia) to gather raw HTML documents and stores them in Google Cloud Storage (GCS). Components are located in `scrape/components/`.
 2. **Infrastructure** ([terraform/](terraform/)): Provisions the necessary Vertex AI Vector Search resources (Index and Endpoint) using Terraform.
-3. **BM25 Index Generation** ([bm25_corpus_index/](bm25_corpus_index/)): A dedicated pipeline that scans the entire corpus to calculate global statistics (TF-IDF) and generates a BM25 index.
-4. **Ingestion Pipeline** ([ingestion_pipeline/](ingestion_pipeline/)): A Kubeflow Pipeline (KFP) that chunks content, generates hybrid embeddings, and updates the Vertex AI Vector Search Index.
+3. **BM25 Index Generation** ([bm25_corpus_index/](bm25_corpus_index/)): A dedicated pipeline that scans the entire corpus to calculate global statistics (TF-IDF) and generates a BM25 index. Components are located in `bm25_corpus_index/components/`.
+4. **Ingestion Pipelines** ([ingestion_pipeline/](ingestion_pipeline/)): Kubeflow Pipelines (KFP) for both full index regeneration and incremental updates. Components are located in `ingestion_pipeline/components/`.
 5. **Query** ([query/](query/)): A sample application that performs hybrid search, re-ranks results, and generates answers using Gemini.
 
-## Detailed Pipeline Workflows
+## Ingestion Pipelines
 
-### 1. BM25 Corpus Indexing (Training Phase)
-* Before individual documents can be embedded sparsely, a global index must be calculated.
-* **Tokenization**: The entire corpus is tokenized, removing stopwords (e.g., "a", "an", "the").
-* **Global Statistics**: The pipeline calculates Inverse Document Frequency (IDF) and average document length across all chunks.
-* **Output**: The resulting index is written to GCS (becoming read-only) and registered in Vertex AI metadata for discovery.
-* **Drift Management**: If the chunking strategy changes or the corpus is significantly updated, this index must be recalculated to avoid drift.
+The system supports two primary ingestion workflows:
 
-### 2. Ingestion Logic (Inference Phase)
-The ingestion flow transforms raw HTML into searchable vectors.
+### 1. Full Index Regeneration (`full_pipeline.py`)
+Used for a complete overhaul of the search index (e.g., when changing chunking strategies or embedding models).
+* **Steps**: Chunking -> BM25 Build -> Embedding Generation -> **Full Index Overwrite**.
+* **Impact**: Replaces all existing vectors in the Vertex AI index.
 
-* **Conversion**: HTML documents are converted to Markdown.
-* **Chunking Strategy**:
-    * Level 1: Split by Markdown headers (#, ##, ###) using `MarkdownHeaderTextSplitter`.
-    * Level 2: Recursive character split with 500 character chunks and 100 character overlap.
-      *Note: Tables and sentences are handled specifically by the recursive splitter.*
-* **Hybrid Embedding**:
-    * Sparse: Uses the pre-calculated BM25 index to generate sparse vectors for each chunk.
-    * Dense: Uses `gemini-embedding-001` (or similar) to generate dense vectors.
-* **Storage**: The schema merges id, embedding (dense), and sparse_embedding before upserting into Vertex Vector Search.
+### 2. Incremental Update (`update_pipeline.py`)
+Used for processing newly scraped data without rebuilding the entire corpus statistics.
+* **Steps**: Chunking (new data only) -> Retrieve Existing BM25 -> Embedding Generation -> **Partial Index Update**.
+* **Impact**: Appends new vectors to the existing Vertex AI index.
 
-### 3. Query Execution
-The query process utilizes Reciprocal Rank Fusion (RRF) to combine results.
-* **Input**: User query string.
-* **Embedding**: Generates both sparse (BM25) and dense (Gemini) embeddings for the query.
-* **Hybrid Search**: Finds nearest neighbors for both vector types.
-* **Ranking**: Applies RRF to merge and rank the Top-K results.
-* **Generation**: Constructs a prompt with the context and sends it to the LLM for the final answer.
+## Local Testing
+You can test the ingestion components and pipeline logic locally without submitting a full Vertex AI Pipeline job. This is useful for rapid iteration on chunking or embedding logic.
+
+```bash
+cd ingestion_pipeline
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the local test harness
+# This uses kfp.local to execute the pipeline logic on your machine
+python test_pipeline_local.py \
+    --pipeline update \
+    --gcs-html-uri gs://YOUR_BUCKET/test-subset/html/ \
+    --gcs-chunks-uri gs://YOUR_BUCKET/test-subset/chunks/ \
+    --index-name YOUR_INDEX_DISPLAY_NAME \
+    --project YOUR_PROJECT_ID
+```
 
 ## Repository Structure
-* `scrape/`: Scrapy spider to download Pokemon data from Bulbapedia.
-* `terraform/`: Terraform configuration to create the Vertex AI Vector Search Index and Endpoint.
-* `bm25_corpus_index/`: Scripts and KFP pipeline to train and save a BM25 encoder model.
-* `ingestion_pipeline/`: The core KFP pipeline for chunking, embedding, and indexing documents.
-* `query/`: Scripts to demonstrate hybrid search and answer generation.
+* `scrape/`: Scrapy spider. Components in `scrape/components/`.
+* `terraform/`: Infrastructure as Code for Vertex AI resources.
+* `bm25_corpus_index/`: BM25 training. Components in `bm25_corpus_index/components/`.
+* `ingestion_pipeline/`: Unified pipelines. Components in `ingestion_pipeline/components/`.
+* `chunk/`: Dedicated chunking logic. Components in `chunk/components/`.
+* `query/`: RAG query and evaluation scripts.
 
 ## Prerequisites
 * **Google Cloud Project**: With billing enabled.

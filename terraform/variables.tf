@@ -106,3 +106,15 @@ variable "max_replica_count" {
   type        = number
   default     = 1
 }
+
+variable "chunk_version" {
+  description = "The version of the chunking strategy used."
+  type        = string
+  default     = "v1"
+}
+
+variable "embedding_model" {
+  description = "The embedding model used for the index."
+  type        = string
+  default     = "gemini-embedding-001"
+}
